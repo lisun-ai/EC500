@@ -1,6 +1,23 @@
 # coding=utf-8
 
+import gc
+import math
+import os
+import pickle
+import time
+import collections
 from pathlib import Path
+
+import cv2
+import numpy as np
+import pandas as pd
+from PIL import Image
+from imgaug.augmentables.bbs import BoundingBox, BoundingBoxesOnImage
+from torch.optim import Adam
+from torch.utils.tensorboard import SummaryWriter
+from tqdm import tqdm
+import matplotlib.patches as patches
+import matplotlib.pyplot as plt
 
 import numpy as np
 import torch
@@ -9,7 +26,123 @@ from sklearn.metrics import auc, precision_recall_curve
 from sklearn.metrics import roc_auc_score, average_precision_score
 from torchvision.ops import nms as NMS
 
+def asMinutes(s):
+    """
+    Converts seconds to minutes and seconds format.
 
+    Args:
+        s: Number of seconds.
+
+    Returns:
+        Time in minutes and seconds format (string).
+    """
+    # Convert seconds to minutes
+    m = math.floor(s / 60)
+    # Calculate remaining seconds
+    s -= m * 60
+    # Return time in 'Xm Ys' format
+    return '%dm %ds' % (m, s)
+
+
+def timeSince(since, percent):
+    """
+    Calculates elapsed time and remaining time since a given starting time.
+
+    Args:
+        since: Starting time in seconds (e.g., time.time()).
+        percent: Percentage of completion (0 to 1).
+
+    Returns:
+        Elapsed time and remaining time as a formatted string.
+    """
+    # Get current time
+    now = time.time()
+    # Calculate elapsed time in seconds
+    s = now - since
+    # Estimated total time
+    es = s / (percent)
+    # Remaining time
+    rs = es - s
+    # Format elapsed time and remaining time using asMinutes function
+    return '%s (remain %s)' % (asMinutes(s), asMinutes(rs))
+
+
+def plot_concept_detector_results(
+        image_to_save,
+        image_orig,
+        image_name,
+        loc="upper right",
+        bb_truth=None,
+        bb_orig=None,
+        bb_preds=None,
+        dpi=500
+):
+    # Create a figure with two subplots
+    fig, ax = plt.subplots(1, 2, figsize=(10, 5))
+
+    # Plot the transformed image in the first subplot
+    ax[0].imshow(image_to_save, cmap=plt.cm.bone)
+
+    # Add ground truth bounding box to the transformed image plot
+    bounding_box = [bb_truth[0][0], bb_truth[0][1], bb_truth[0][2], bb_truth[0][3]]
+    width = bounding_box[2] - bounding_box[0]
+    height = bounding_box[3] - bounding_box[1]
+    rect = patches.Rectangle(
+        (bounding_box[0], bounding_box[1]),
+        width,
+        height,
+        linewidth=3,
+        edgecolor='r',
+        facecolor='none',
+        label='Ground Truth'
+    )
+    ax[0].add_patch(rect)
+    ax[0].set_title('Transformed Image')
+    ax[0].axis('off')
+
+    # Add predicted bounding box to the transformed image plot if available
+    if bb_preds is not None:
+        bounding_box_pred = [bb_preds[0], bb_preds[1], bb_preds[2], bb_preds[3]]
+        width_pred = bounding_box_pred[2] - bounding_box_pred[0]
+        height_pred = bounding_box_pred[3] - bounding_box_pred[1]
+        rect_pred = patches.Rectangle(
+            (bounding_box_pred[0], bounding_box_pred[1]),
+            width_pred,
+            height_pred,
+            linewidth=3,
+            edgecolor='b',
+            facecolor='none',
+            label='Predicted'
+        )
+        ax[0].add_patch(rect_pred)
+
+    # Add legend to the transformed image plot
+    handles, labels = ax[0].get_legend_handles_labels()
+    if handles:
+        ax[0].legend(loc=loc, borderaxespad=0., framealpha=0.5)
+
+    # Plot the original image in the second subplot
+    ax[1].imshow(image_orig, cmap=plt.cm.bone)
+    # Add ground truth bounding box to the original image plot
+    bounding_box = [bb_orig[0], bb_orig[1], bb_orig[2], bb_orig[3]]
+    width = bounding_box[2] - bounding_box[0]
+    height = bounding_box[3] - bounding_box[1]
+    rect = patches.Rectangle(
+        (bounding_box[0], bounding_box[1]),
+        width,
+        height,
+        linewidth=3,
+        edgecolor='r',
+        facecolor='none',
+        label='Ground Truth'
+    )
+    ax[1].add_patch(rect)
+    ax[1].set_title('Original Image')
+    ax[1].axis('off')
+
+    # Save the figure as an image file
+    plt.savefig(image_name, bbox_inches='tight', dpi=dpi)
+    
 def compute_overlap(a, b):
     """
     Parameters
